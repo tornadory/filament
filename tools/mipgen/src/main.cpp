@@ -20,6 +20,7 @@
 #include <image/KtxBundle.h>
 #include <image/LinearImage.h>
 
+#include <imageio/BlockCompression.h>
 #include <imageio/ImageDecoder.h>
 #include <imageio/ImageEncoder.h>
 
@@ -72,18 +73,21 @@ Options:
        specify output file format, inferred from output pattern if omitted
    --kernel=[box|nearest|hermite|gaussian|normals|mitchell|lanczos|min], -k [filter]
        specify filter kernel type (defaults to lanczos)
+       the "normals" filter may automatically change the compression scheme
    --strip-alpha
        ignore the alpha component of the input image
    --compression=COMPRESSION, -c COMPRESSION
        format specific compression:
+           KTX: astc_[fast/thorough]_[ldr/hdr]_RATE, where RATE is in [0.8, 8.0]
            PNG: Ignored
            Radiance: Ignored
            Photoshop: 16 (default), 32
            OpenEXR: RAW, RLE, ZIPS, ZIP, PIZ (default)
            DDS: 8, 16 (default), 32
 
-Example:
+Examples:
     MIPGEN -g --kernel=hermite grassland.png mip_%03d.png
+    MIPGEN -f ktx --compression=astc_fast_ldr_4.0 grassland.png mips.ktx
 )TXT";
 
 static const char* HTML_PREFIX = R"HTML(<!DOCTYPE html>
@@ -271,9 +275,25 @@ int main(int argc, char* argv[]) {
             info.glInternalFormat =
             info.glBaseInternalFormat = KtxBundle::LUMINANCE;
         }
+        AstcConfig astcConfig {};
+        if (!g_compression.empty()) {
+            if (g_compression.substr(0, 5) == "astc_") {
+                string suffix = g_compression.substr(5);
+                astcConfig = astcParseOptionString(suffix);
+                printf("Compressing with bitrate = %f\n", astcConfig.bitrate);
+            } 
+            if (astcConfig.bitrate == 0.0f) {
+                cerr << "Unrecognized compression: " << g_compression << endl;
+                return 1;
+            }
+        }
         uint32_t mip = 0;
-        auto addLevel = [&container, &mip](const LinearImage& image) {
+        auto addLevel = [&container, &mip, astcConfig](const LinearImage& image) {
             std::unique_ptr<uint8_t[]> data;
+            if (astcConfig.bitrate) {
+                AstcTexture tex = astcCompress(image, astcConfig);
+                // TODO...
+            }
             if (g_grayscale && g_linearized) {
                 data = fromLinearToGrayscale<uint8_t>(image);
             } else if (g_grayscale) {
